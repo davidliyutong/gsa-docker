@@ -1,0 +1,10 @@
+# IDE
+.vs
+.vscode
+.idea
+
+# checkpoints
+checkpoints/*.pth
+
+# third_party
+Grounded-Segment-Anything

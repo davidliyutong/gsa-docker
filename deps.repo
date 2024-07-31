@@ -1,0 +1,5 @@
+repositories:
+    Grounded-Segment-Anything:
+        type: git
+        url: https://github.com/IDEA-Research/Grounded-Segment-Anything
+        version: main
