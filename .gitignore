@@ -8,3 +8,6 @@ checkpoints/*.pth
 
 # third_party
 Grounded-Segment-Anything
+
+# python
+*.pyc

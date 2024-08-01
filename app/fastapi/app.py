@@ -36,6 +36,9 @@ from transformers import BlipProcessor, BlipForConditionalGeneration
 
 import openai
 
+from pydantic import BaseModel
+from pydantic import field_serializer
+
 def show_anns(anns):
     if len(anns) == 0:
         return
@@ -191,7 +194,79 @@ sam_predictor = None
 sam_automask_generator = None
 inpaint_pipeline = None
 
-def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_threshold, text_threshold, iou_threshold, inpaint_mode, scribble_mode, openai_api_key):
+class GroundedSAMOutputMsg(BaseModel):
+    full_image: str
+    mask_image: str | None = None
+    masks: list[str] | None = None
+
+class GroundedSAMOutput:
+    full_image: Image.Image
+    mask_image: Image.Image | None
+    masks: list[np.ndarray] | None
+
+    def __init__(
+        self,
+        full_image: Image.Image,
+        mask_image: Image.Image | None,
+        masks: list[np.ndarray] | None,
+    ):
+        self.full_image = full_image
+        self.mask_image = mask_image
+        self.masks = masks
+
+    @staticmethod
+    def img_to_base64_str(img: Image.Image) -> str:
+        buffered = io.BytesIO()
+        img.save(buffered, format="PNG")
+        return base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+    @staticmethod
+    def base64_str_to_img(base64_str: str) -> Image.Image:
+        img_data = base64.b64decode(base64_str)
+        return Image.open(io.BytesIO(img_data))
+
+    @staticmethod
+    def numpy_to_base64_str(array: np.ndarray) -> str:
+        buffered = io.BytesIO()
+        np.save(buffered, array)
+        return base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+    @staticmethod
+    def base64_str_to_numpy(base64_str: str) -> np.ndarray:
+        array_data = base64.b64decode(base64_str)
+        buffered = io.BytesIO(array_data)
+        return np.load(buffered)
+
+    def to_model(self):
+        return GroundedSAMOutputMsg(
+            full_image=self.img_to_base64_str(self.full_image),
+            mask_image=(
+                self.img_to_base64_str(self.mask_image) if self.mask_image else None
+            ),
+            masks=(
+                [self.numpy_to_base64_str(mask) for mask in self.masks]
+                if self.masks
+                else None
+            ),
+        )
+
+    def to_dict(self):
+        return self.to_model().model_dump()
+
+    @classmethod
+    def from_dict(cls, data):
+        full_image = cls.base64_str_to_img(data["full_image"])
+        mask_image = (
+            cls.base64_str_to_img(data["mask_image"]) if data["mask_image"] else None
+        )
+        masks = (
+            [cls.base64_str_to_numpy(mask) for mask in data["masks"]]
+            if data["masks"]
+            else None
+        )
+        return cls(full_image, mask_image, masks)
+
+def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_threshold, text_threshold, iou_threshold, inpaint_mode, scribble_mode, openai_api_key, structured_output:bool=False) -> list[Image.Image] | GroundedSAMOutput:
 
     global blip_processor, blip_model, groundingdino_model, sam_predictor, sam_automask_generator, inpaint_pipeline
 
@@ -289,22 +364,28 @@ def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_th
 
             transformed_boxes = sam_predictor.transform.apply_boxes_torch(boxes_filt, image.shape[:2]).to(device)
 
-            masks, _, _ = sam_predictor.predict_torch(
-                point_coords = None,
-                point_labels = None,
-                boxes = transformed_boxes,
-                multimask_output = False,
-            )
+            try:
+                masks, _, _ = sam_predictor.predict_torch(
+                    point_coords = None,
+                    point_labels = None,
+                    boxes = transformed_boxes,
+                    multimask_output = False,
+                )
+            except RuntimeError as e:
+                # might be there is no box
+                masks = []
+            except Exception as e:
+                raise e
 
     if task_type == 'det':
         image_draw = ImageDraw.Draw(image_pil)
         for box, label in zip(boxes_filt, pred_phrases):
             draw_box(box, image_draw, label)
 
-        return [image_pil]
+        return GroundedSAMOutput(full_image=image_pil, mask_image=None, masks=[])
     elif task_type == 'automask':
         full_img, res = show_anns(masks)
-        return [full_img]
+        return GroundedSAMOutput(full_image=full_img, mask_image=None, masks=[])
     elif task_type == 'scribble':
         mask_image = Image.new('RGBA', size, color=(0, 0, 0, 0))
 
@@ -315,9 +396,12 @@ def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_th
 
         image_pil = image_pil.convert('RGBA')
         image_pil.alpha_composite(mask_image)
-        return [image_pil, mask_image]
+        if structured_output:
+            return GroundedSAMOutput(full_image=image_pil, mask_image=mask_image, masks=[mask[0].cpu().numpy() for mask in masks])
+        else:
+            return [image_pil, mask_image]
     elif task_type == 'seg' or task_type == 'automatic':
-        
+
         mask_image = Image.new('RGBA', size, color=(0, 0, 0, 0))
 
         mask_draw = ImageDraw.Draw(mask_image)
@@ -334,7 +418,10 @@ def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_th
 
         image_pil = image_pil.convert('RGBA')
         image_pil.alpha_composite(mask_image)
-        return [image_pil, mask_image]
+        if structured_output:
+            return GroundedSAMOutput(full_image=image_pil, mask_image=mask_image, masks=[mask[0].cpu().numpy() for mask in masks])
+        else:
+            return [image_pil, mask_image]
     elif task_type == 'inpainting':
         assert inpaint_prompt, 'inpaint_prompt is not found!'
         # inpainting pipeline
@@ -343,7 +430,7 @@ def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_th
             masks = torch.where(masks > 0, True, False)
         mask = masks[0][0].cpu().numpy() # simply choose the first mask, which will be refine in the future release
         mask_pil = Image.fromarray(mask)
-        
+
         if inpaint_pipeline is None:
             inpaint_pipeline = StableDiffusionInpaintPipeline.from_pretrained(
             "runwayml/stable-diffusion-inpainting", torch_dtype=torch.float16
@@ -352,21 +439,99 @@ def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_th
 
         image = inpaint_pipeline(prompt=inpaint_prompt, image=image_pil.resize((512, 512)), mask_image=mask_pil.resize((512, 512))).images[0]
         image = image.resize(size)
-
-        return [image, mask_pil]
+        if structured_output:
+            return GroundedSAMOutput(full_image=image, mask_image=mask_pil, masks=[mask[0].cpu().numpy() for mask in masks])
+        else:
+            return [image_pil, mask_image]
     else:
         print("task_type:{} error!".format(task_type))
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser("Grounded SAM demo", add_help=True)
-    parser.add_argument("--debug", action="store_true", help="using debug mode")
-    parser.add_argument("--share", action="store_true", help="share the app")
-    parser.add_argument('--port', type=int, default=7589, help='port to run the server')
-    parser.add_argument('--no-gradio-queue', action="store_true", help='path to the SAM checkpoint')
-    args = parser.parse_args()
 
-    print(args)
 
+# Fast API
+import uvicorn
+from fastapi import FastAPI, HTTPException
+
+import io
+import numpy as np
+from enum import Enum
+import base64
+
+
+fastapi_app = FastAPI()
+
+
+# Define the input model
+class InputImage(BaseModel):
+    image: bytes
+    mask: bytes | None = None
+
+class TaskTypeEnum(str, Enum):
+    INPAINTING = "inpainting"
+    SEG = "seg"
+    DET = "det"
+    SCRIBBLE = "scribble"
+    AUTOMASK = "automask"
+    AUTOMATIC = "automatic"
+
+class InpaintModeEnum(str, Enum):
+    MERGE = "merge"
+    FIRST = "first"
+
+class ScribbleModeEnum(str, Enum):
+    MERGE = "merge"
+    SPLIT = "split"
+
+class RunGroundedSamParams(BaseModel):
+    input_image: InputImage
+    text_prompt: str
+    task_type: TaskTypeEnum
+    inpaint_prompt: str | None = None
+    box_threshold: float | None = 0.3
+    text_threshold: float | None = 0.25
+    iou_threshold: float | None = 0.5
+    inpaint_mode: InpaintModeEnum | None = None
+    scribble_mode: ScribbleModeEnum | None = None
+    openai_api_key: str | None = None
+
+
+@fastapi_app.post("/v1/grounded_sam")
+def fast_api_run_grounded_sam(params: RunGroundedSamParams) -> GroundedSAMOutputMsg:
+    try:
+        # Convert input_image bytes to PIL Image
+        image = Image.open(io.BytesIO(base64.b64decode(params.input_image.image)))
+        input_image = {
+            "image": image,
+            "mask": Image.open(io.BytesIO(base64.b64decode(params.input_image.mask))) if params.input_image.mask else Image.new('RGBA', image.size, color=(0, 0, 0, 0))
+        }
+
+        result = run_grounded_sam(
+            input_image=input_image,
+            text_prompt=params.text_prompt,
+            task_type=params.task_type.value if params.task_type else None,
+            inpaint_prompt=params.inpaint_prompt,
+            box_threshold=params.box_threshold,
+            text_threshold=params.text_threshold,
+            iou_threshold=params.iou_threshold,
+            inpaint_mode=params.inpaint_mode.value if params.inpaint_mode else None,
+            scribble_mode=params.scribble_mode.value if params.scribble_mode else None,
+            openai_api_key=params.openai_api_key,
+            structured_output=True
+        )
+
+        if isinstance(result, list):
+            if len(result) == 2:
+                return GroundedSAMOutput(full_image=result[0], mask_image=result[1], masks=None).to_model()
+            else:
+                return GroundedSAMOutput(full_image=result[0], mask_image=None, masks=None).to_model()
+        else:
+            return result.to_model()
+
+    except Exception as e:
+        raise e
+        raise HTTPException(status_code=500, detail=str(e))
+
+def get_gr_block():
     block = gr.Blocks()
     if not args.no_gradio_queue:
         block = block.queue()
@@ -402,4 +567,17 @@ if __name__ == "__main__":
                         input_image, text_prompt, task_type, inpaint_prompt, box_threshold, text_threshold, iou_threshold, inpaint_mode, scribble_mode, openai_api_key], outputs=gallery)
 
     block.queue(concurrency_count=100)
-    block.launch(server_name='0.0.0.0', server_port=args.port, debug=args.debug, share=args.share)
+    return block
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser("Grounded SAM demo", add_help=True)
+    parser.add_argument("--debug", action="store_true", help="using debug mode")
+    parser.add_argument("--share", action="store_true", help="share the app")
+    parser.add_argument('--port', type=int, default=7589, help='port to run the server')
+    parser.add_argument('--no-gradio-queue', action="store_true", help='path to the SAM checkpoint')
+    args = parser.parse_args()
+
+    print(args)
+    block=get_gr_block()
+    app = gr.mount_gradio_app(fastapi_app, block, path="/gr")
+    uvicorn.run(fastapi_app, host='0.0.0.0', port=args.port, limit_concurrency=16)
