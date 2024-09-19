@@ -60,8 +60,10 @@ class GroundedSAMOutput:
 
     @staticmethod
     def numpy_to_base64_str(array: np.ndarray) -> str:
+        # expected input to be rgb image, not bgr
         buffered = io.BytesIO()
-        np.save(buffered, array)
+        img = Image.fromarray(array)
+        img.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
     @staticmethod
@@ -213,9 +215,8 @@ class GroundedSAMRestful:
             "openai_api_key": openai_api_key,
         }
 
-        response = requests.post(f"{self.endpoint}{_path}", json=payload)
+        response = requests.post(f"{self.endpoint}{_path}", json=payload, timeout=60)
         return GroundedSAMOutput.from_dict(response.json())
-
 
 if __name__ == "__main__":
     api = GroundedSAMRestful("http://127.0.0.1:7584")

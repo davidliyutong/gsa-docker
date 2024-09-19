@@ -71,7 +71,7 @@ docker run --ipc=host --gpus all -it --rm -p 7589:7589 gsa-docker:v0-fastapi
 
 ### WebUI
 
-Open the browser and navigate to `http://localhost:7589/` to access the WebUI of Gradio. The Gradio version is currently `3.50.2`.
+Open the browser and navigate to `http://localhost:7589/gr` to access the WebUI of Gradio. The Gradio version is currently `3.50.2`.
 
 ### API
 
