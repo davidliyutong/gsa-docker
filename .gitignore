@@ -4,7 +4,7 @@
 .idea
 
 # checkpoints
-checkpoints/*.pth
+checkpoints/*
 
 # third_party
 Grounded-Segment-Anything

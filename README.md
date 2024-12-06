@@ -8,9 +8,13 @@ This repo packs the [Grounded-Segment-Anything](https://github.com/IDEA-Research
 
 Make sure you have `sam_vit_h_4b8939.pth` and `groundingdino_swint_ogc.pth` in the `checkpoints` directory. They can be downloaded from [sam_vit_h_4b8939.pth](https://huggingface.co/spaces/abhishek/StableSAM/blob/main/sam_vit_h_4b8939.pth) and [groundingdino_swint_ogc.pth](https://huggingface.co/ShilongLiu/GroundingDINO/blob/main/groundingdino_swint_ogc.pth)
 
+Run the `boostrap_model.py` to download required models from huggingface, the models will be saved to `$HOME/.cache/huggingface/hub/`
+
+> The appropriate version of huggingface_hub is `0.25.2`
+
 ### Pipeline
 
-gsa-docker:v0 --- [bootstrap, download models, and install dependencies] ---> gsa-docker:v0-ready --- [install fastapi/app.py] ---> gsa-docker:v0-fastapi
+init --\[build_image.sh\]--> gsa-docker:v0 --\[build_fastapi_feature.sh\]--> gsa-docker:v0-fastapi
 
 ### Build the raw docker image
 
