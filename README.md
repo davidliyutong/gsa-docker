@@ -88,10 +88,16 @@ Python client at `python_client/grounded_sam.py`, which is named as `GroundedSAM
 ```python
 from PIL import ImageShow
 from python_client.grounded_sam import GroundedSAMRestful
-api = GroundedSAMRestful("http://127.0.0.1:7584")
+api = GroundedSAMRestful("http://127.0.0.1:7589")
 res = api.call_with_filepath(
     "test.jpg", text_prompt="blue tape", task_type="seg"
 )
+print(res.masks)
+ImageShow.show(res.full_image)
+
+# from numpy
+img = cv2.imread("test.jpg")
+res = api.call_with_numpy(img)
 print(res.masks)
 ImageShow.show(res.full_image)
 ```

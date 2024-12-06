@@ -219,9 +219,14 @@ class GroundedSAMRestful:
         return GroundedSAMOutput.from_dict(response.json())
 
 if __name__ == "__main__":
-    api = GroundedSAMRestful("http://127.0.0.1:7584")
+    api = GroundedSAMRestful("http://127.0.0.1:7589")
     res = api.call_with_filepath(
         "test.jpg", text_prompt="blue tape", task_type=TaskTypeEnum.SEG
-    )
+    )    
+    print(res.masks)
+    ImageShow.show(res.full_image)
+
+    img = cv2.imread("test.jpg")
+    res = api.call_with_numpy(img)
     print(res.masks)
     ImageShow.show(res.full_image)
